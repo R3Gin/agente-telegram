@@ -1,0 +1,22 @@
+{
+  "name": "agente-telegram",
+  "version": "1.0.0",
+  "description": "Assistente no Telegram que conversa com o Claude Code em sessão contínua, com botões, perguntas e etapas ao vivo.",
+  "type": "module",
+  "private": true,
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/index.js",
+    "test": "node --test --test-concurrency=1 test/"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.286",
+    "@grammyjs/auto-retry": "2.0.2",
+    "grammy": "1.46.0",
+    "marked": "18.0.14",
+    "zod": "4.6.5"
+  }
+}

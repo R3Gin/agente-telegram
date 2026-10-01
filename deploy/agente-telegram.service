@@ -1,0 +1,22 @@
+[Unit]
+Description=Agente Telegram (Claude Code em sessão contínua)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# root porque o login do Claude Code (assinatura) está no usuário root
+User=root
+WorkingDirectory=/home/rmthost/agente-telegram
+ExecStart=/usr/bin/node --env-file-if-exists=/home/rmthost/agente-telegram/.env src/index.js
+Environment=HOME=/root
+Environment=NODE_ENV=production
+Environment=PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Restart=always
+RestartSec=5
+# no desligamento o bot interrompe o Claude com calma antes de sair
+KillMode=mixed
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
