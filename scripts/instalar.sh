@@ -58,16 +58,78 @@ if [ -f "$OLD_ENV" ]; then
   fi
 fi
 
-# token do bot novo
-if [ -z "$(getenv TELEGRAM_BOT_TOKEN)" ]; then
-  if [ -t 0 ]; then
-    read -r -s -p "Cole o token do bot NOVO (do @BotFather) e tecle Enter: " tok; echo
-    [ -n "$tok" ] && setenv TELEGRAM_BOT_TOKEN "$tok" && ok "token salvo no .env"
+# token do bot novo ------------------------------------------------------------
+TG_API="${TG_API:-https://api.telegram.org}"
+is_tty() { [ -t 0 ] || [ "${FORCE_TTY:-}" = 1 ]; }
+
+# Tira o lixo da colagem: token colado duas vezes, espaços, códigos do terminal.
+extract_token() {
+  local raw="$1" t
+  t=$(printf '%s' "$raw" | grep -oE '[0-9]{6,12}:[A-Za-z0-9_-]{35}' | head -n1 || true)
+  [ -n "$t" ] || t=$(printf '%s' "$raw" | grep -oE '[0-9]{6,12}:[A-Za-z0-9_-]{30,}' | head -n1 || true)
+  printf '%s' "$t"
+}
+
+# Pergunta ao Telegram se o token funciona e imprime o @usuario do bot.
+# Retorno: 0 = ok, 1 = o Telegram recusou, 2 = sem resposta (rede).
+check_token() {
+  local resp
+  resp=$(curl -sS --max-time 15 "$TG_API/bot$1/getMe" 2>/dev/null) || return 2
+  [[ "$resp" == *'"ok":true'* ]] || return 1
+  if [[ "$resp" =~ \"username\":\"([^\"]+)\" ]]; then printf '%s' "${BASH_REMATCH[1]}"; else printf 'bot'; fi
+}
+
+OLD_TOKEN=""
+[ -f "$OLD_ENV" ] && OLD_TOKEN=$(grep -E '^TELEGRAM_BOT_TOKEN=' "$OLD_ENV" | tail -n1 | cut -d= -f2- || true)
+
+TOKEN="$(getenv TELEGRAM_BOT_TOKEN)"
+BOTNAME=""
+if [ -n "$TOKEN" ]; then
+  clean=$(extract_token "$TOKEN")
+  rc=1
+  if [ -n "$clean" ]; then rc=0; BOTNAME=$(check_token "$clean") || rc=$?; fi
+  if [ "$rc" = 0 ]; then
+    if [ "$clean" != "$TOKEN" ]; then setenv TELEGRAM_BOT_TOKEN "$clean"; ok "token do .env corrigido (tinha sobra da colagem)"; fi
+    TOKEN="$clean"
+  elif [ "$rc" = 2 ]; then
+    warn "não consegui falar com o Telegram agora; mantendo o token do .env sem conferir"
+    [ "$clean" != "$TOKEN" ] && setenv TELEGRAM_BOT_TOKEN "$clean"
+    TOKEN="$clean"
+  else
+    warn "o token que está no .env não funciona (provavelmente foi colado mais de uma vez)"
+    TOKEN=""
+    setenv TELEGRAM_BOT_TOKEN ""
   fi
 fi
-if [ -n "$(getenv TELEGRAM_BOT_TOKEN)" ] && [ -f "$OLD_ENV" ]; then
-  old_tok=$(grep -E '^TELEGRAM_BOT_TOKEN=' "$OLD_ENV" | tail -n1 | cut -d= -f2- || true)
-  [ "$old_tok" = "$(getenv TELEGRAM_BOT_TOKEN)" ] && fail "o token é o mesmo do bot antigo; use o token do bot NOVO"
+if [ -z "$TOKEN" ] && is_tty; then
+  for _try in 1 2 3; do
+    echo
+    echo "Cole o token do bot NOVO (do @BotFather) UMA vez e tecle Enter."
+    echo "Ele tem este formato: 123456789:AAH... (o texto vai aparecer na tela)"
+    read -r -p "token: " raw || true
+    clean=$(extract_token "$raw")
+    if [ -z "$clean" ]; then
+      warn "isso não parece um token"
+      continue
+    fi
+    if [ -n "$OLD_TOKEN" ] && [ "$clean" = "$OLD_TOKEN" ]; then
+      warn "esse é o token do bot ANTIGO; use o do bot novo"
+      continue
+    fi
+    rc=0
+    BOTNAME=$(check_token "$clean") || rc=$?
+    if [ "$rc" = 0 ] || [ "$rc" = 2 ]; then
+      [ "$rc" = 2 ] && warn "não consegui conferir com o Telegram agora; vou salvar assim mesmo"
+      setenv TELEGRAM_BOT_TOKEN "$clean"
+      TOKEN="$clean"
+      break
+    fi
+    warn "o Telegram recusou esse token; confira no @BotFather (/mybots → seu bot → API Token)"
+  done
+fi
+if [ -n "$TOKEN" ]; then
+  [ -n "$OLD_TOKEN" ] && [ "$TOKEN" = "$OLD_TOKEN" ] && fail "o token é o mesmo do bot antigo; use o token do bot NOVO"
+  if [ -n "$BOTNAME" ]; then ok "token válido: @$BOTNAME"; else BOTNAME="o bot novo"; fi
 fi
 
 # pastas
@@ -112,23 +174,35 @@ fi
 [ -x "$(getenv WHISPER_CLI)" ] || warn "WHISPER_CLI não encontrado: áudio fica desativado até ajustar o .env"
 
 # --- systemd ----------------------------------------------------------------
-if [ -z "$(getenv TELEGRAM_BOT_TOKEN)" ] || [ -z "$(getenv ALLOWED_TELEGRAM_IDS)" ]; then
-  warn "falta TELEGRAM_BOT_TOKEN ou ALLOWED_TELEGRAM_IDS no $DIR/.env"
-  warn "preencha e rode de novo: bash scripts/instalar.sh"
-  exit 0
+[ "${SKIP_SYSTEMD:-}" = 1 ] && { ok "(teste) parando antes do systemd"; exit 0; }
+if [ -z "$TOKEN" ] || [ -z "$(getenv ALLOWED_TELEGRAM_IDS)" ]; then
+  [ -z "$TOKEN" ] && warn "falta um token válido do bot novo em TELEGRAM_BOT_TOKEN ($DIR/.env)"
+  [ -z "$(getenv ALLOWED_TELEGRAM_IDS)" ] && warn "falta o seu ID do Telegram em ALLOWED_TELEGRAM_IDS ($DIR/.env)"
+  systemctl stop "$SERVICE" >/dev/null 2>&1 || true
+  warn "rode de novo: bash scripts/instalar.sh"
+  exit 1
 fi
 
 UNIT=/etc/systemd/system/$SERVICE.service
 sed -e "s|/home/rmthost/agente-telegram|$DIR|g" -e "s|/usr/bin/node|$(command -v node)|g" deploy/$SERVICE.service > "$UNIT"
 systemctl daemon-reload
 systemctl enable "$SERVICE" >/dev/null 2>&1 || true
+START_TS=$(date '+%Y-%m-%d %H:%M:%S')
 systemctl restart "$SERVICE"
-sleep 6
+sleep 8
+started=0
 if systemctl is-active --quiet "$SERVICE"; then
-  ok "serviço $SERVICE rodando"
-else
-  warn "o serviço não subiu; veja: journalctl -u $SERVICE -n 50 --no-pager"
+  case "$(getenv LOG_LEVEL)" in
+    warn|error) started=1 ;;
+    *) journalctl -u "$SERVICE" --since "$START_TS" --no-pager 2>/dev/null | grep -q "recebendo mensagens" && started=1 ;;
+  esac
 fi
-journalctl -u "$SERVICE" -n 15 --no-pager || true
-echo
-ok "pronto. Abra o bot novo no Telegram e mande /start"
+if [ "$started" = 1 ]; then
+  ok "serviço $SERVICE rodando"
+  echo
+  if [ "$BOTNAME" = "o bot novo" ]; then ok "pronto. Abra o bot novo no Telegram e mande /start"; else ok "pronto. Abra @$BOTNAME no Telegram e mande /start"; fi
+else
+  journalctl -u "$SERVICE" -n 20 --no-pager || true
+  echo
+  fail "o serviço não subiu direito; me mande as linhas acima"
+fi

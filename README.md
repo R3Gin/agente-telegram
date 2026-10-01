@@ -43,7 +43,7 @@ bash scripts/instalar.sh
 O instalador:
 1. instala as dependências;
 2. cria o `.env` (permissão 600) e copia do bot antigo, só lendo, o seu ID do Telegram e o caminho do whisper;
-3. pede o **token do bot novo** (se rodar pelo SSH) — ou preencha `TELEGRAM_BOT_TOKEN` no `.env` e rode de novo;
+3. pede o **token do bot novo** (se rodar pelo SSH): cole **uma vez** e tecle Enter. Ele confere o token com o Telegram, limpa sobras de colagem e, se estiver errado, pede de novo. Também dá para preencher `TELEGRAM_BOT_TOKEN` no `.env` e rodar de novo;
 4. confere se o `claude` roda nesta CPU e se está logado;
 5. baixa o modelo de áudio leve (`ggml-tiny-q5_1`, ~31 MB) para `models/`;
 6. instala e inicia o serviço `agente-telegram`.
